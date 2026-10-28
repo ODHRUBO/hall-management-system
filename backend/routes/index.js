@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { body } = require('express-validator');
+const { body, validationResult } = require('express-validator');
 const { authenticate, authorize } = require('../middleware/auth');
 
 const authCtrl = require('../controllers/authController');
@@ -24,28 +24,44 @@ router.put('/auth/change-password', authenticate, authCtrl.changePassword);
 
 // ─── User Management (Admin) ───────────────────────────────────────────────
 const { User } = require('../models');
+const userFields = [
+  body('name').trim().notEmpty(),
+  body('email').isEmail().normalizeEmail(),
+  body('role').optional().isIn(['admin', 'hall_manager', 'student']),
+  body('password').optional({ checkFalsy: true }).isLength({ min: 6 }),
+];
+const validateRequest = (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+  next();
+};
 
 router.get('/users', authenticate, authorize('admin'), async (req, res) => {
   try {
     const users = await User.findAll({ order: [['createdAt', 'DESC']] });
     res.json(users);
-  } catch (e) { res.status(500).json({ message: e.message }); }
+  } catch (e) { console.error(e); res.status(500).json({ message: 'Internal server error' }); }
 });
 
-router.post('/users', authenticate, authorize('admin'), async (req, res) => {
+router.post('/users', authenticate, authorize('admin'), userFields, validateRequest, async (req, res) => {
   try {
-    const user = await User.create(req.body);
+    const { name, email, password, role, studentId, phone, department } = req.body;
+    if (!password) return res.status(400).json({ message: 'Password is required' });
+    const user = await User.create({ name, email, password, role, studentId, phone, department });
     res.status(201).json({ message: 'User created', user });
-  } catch (e) { res.status(500).json({ message: e.message }); }
+  } catch (e) { console.error(e); res.status(500).json({ message: 'Internal server error' }); }
 });
 
-router.put('/users/:id', authenticate, authorize('admin'), async (req, res) => {
+router.put('/users/:id', authenticate, authorize('admin'), userFields, validateRequest, async (req, res) => {
   try {
     const user = await User.findByPk(req.params.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
-    await user.update(req.body);
+    const { name, email, password, role, studentId, phone, department } = req.body;
+    const updates = { name, email, role, studentId, phone, department };
+    if (password) updates.password = password;
+    await user.update(updates);
     res.json({ message: 'User updated', user });
-  } catch (e) { res.status(500).json({ message: e.message }); }
+  } catch (e) { console.error(e); res.status(500).json({ message: 'Internal server error' }); }
 });
 
 router.delete('/users/:id', authenticate, authorize('admin'), async (req, res) => {
@@ -54,7 +70,7 @@ router.delete('/users/:id', authenticate, authorize('admin'), async (req, res) =
     if (!user) return res.status(404).json({ message: 'User not found' });
     await user.update({ isActive: false });
     res.json({ message: 'User deactivated' });
-  } catch (e) { res.status(500).json({ message: e.message }); }
+  } catch (e) { console.error(e); res.status(500).json({ message: 'Internal server error' }); }
 });
 
 // ─── Halls ─────────────────────────────────────────────────────────────────
@@ -71,7 +87,11 @@ router.delete('/rooms/:id', authenticate, authorize('admin'), hallCtrl.deleteRoo
 
 // ─── Applications ──────────────────────────────────────────────────────────
 router.get('/applications', authenticate, appCtrl.getApplications);
-router.post('/applications', authenticate, authorize('student'), appCtrl.submitApplication);
+router.post('/applications', authenticate, authorize('student'), [
+  body('hallId').isUUID(),
+  body('preferredRoomType').isIn(['single', 'double', 'triple', 'dormitory']),
+  body('session').trim().notEmpty(),
+], validateRequest, appCtrl.submitApplication);
 router.put('/applications/:id/review', authenticate, authorize('admin', 'hall_manager'), appCtrl.reviewApplication);
 
 // ─── Allocations ───────────────────────────────────────────────────────────
@@ -87,7 +107,13 @@ router.put('/payments/:id/confirm', authenticate, authorize('admin', 'hall_manag
 // ─── Complaints ────────────────────────────────────────────────────────────
 router.get('/complaints', authenticate, cmpCtrl.getComplaints);
 router.get('/complaints/stats', authenticate, authorize('admin', 'hall_manager'), cmpCtrl.getComplaintStats);
-router.post('/complaints', authenticate, authorize('student'), cmpCtrl.submitComplaint);
+router.post('/complaints', authenticate, authorize('student'), [
+  body('hallId').isUUID(),
+  body('category').isIn(['maintenance', 'noise', 'hygiene', 'security', 'facilities', 'staff', 'other']),
+  body('title').trim().notEmpty(),
+  body('description').trim().notEmpty(),
+  body('priority').optional().isIn(['low', 'medium', 'high', 'urgent']),
+], validateRequest, cmpCtrl.submitComplaint);
 router.put('/complaints/:id/update', authenticate, authorize('admin', 'hall_manager'), cmpCtrl.updateComplaint);
 
 // ─── Reports ───────────────────────────────────────────────────────────────

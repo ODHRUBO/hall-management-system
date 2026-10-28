@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { hallsAPI, roomsAPI, usersAPI } from '../../services/api';
+import { useAuth } from '../../contexts/AuthContext';
 import { PageHeader, Card, DataTable, Badge, Btn, Modal, Field, Input, Select, Textarea, Alert, Spinner } from '../dashboard/UI';
 
 export const HallsRoomsPage = () => {
+  const { user } = useAuth();
   const [halls, setHalls] = useState([]);
   const [rooms, setRooms] = useState([]);
   const [managers, setManagers] = useState([]);
@@ -20,7 +22,11 @@ export const HallsRoomsPage = () => {
   const load = async () => {
     setLoading(true);
     try {
-      const [h, r, u] = await Promise.all([hallsAPI.getAll(), roomsAPI.getAll({}), usersAPI.getAll()]);
+      const [h, r, u] = await Promise.all([
+        hallsAPI.getAll(),
+        roomsAPI.getAll({}),
+        user?.role === 'admin' ? usersAPI.getAll() : Promise.resolve({ data: [] }),
+      ]);
       setHalls(h.data);
       setRooms(r.data);
       setManagers(u.data.filter(u => u.role === 'hall_manager'));
@@ -42,8 +48,9 @@ export const HallsRoomsPage = () => {
 
   const saveHall = async () => {
     try {
-      if (editItem) await hallsAPI.update(editItem.id, hallForm);
-      else await hallsAPI.create(hallForm);
+      const data = { ...hallForm, managerId: hallForm.managerId || null };
+      if (editItem) await hallsAPI.update(editItem.id, data);
+      else await hallsAPI.create(data);
       setHallModal(false); setEditItem(null); setHallForm({ name: '', description: '', managerId: '' });
       setMsg({ type: 'success', text: `Hall ${editItem ? 'updated' : 'created'} successfully` });
       load();

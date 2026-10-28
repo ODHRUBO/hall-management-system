@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import { reportsAPI, complaintsAPI } from '../../services/api';
-import { StatCard, Card, Spinner, PageHeader } from './UI';
+import { StatCard, Card, Spinner, PageHeader, Alert } from './UI';
 import { useAuth } from '../../contexts/AuthContext';
 
 const COLORS = ['#6c3fc5', '#0a7d6b', '#e67e22', '#e74c3c', '#3498db'];
@@ -12,6 +12,7 @@ export const AdminDashboard = () => {
   const [occupancy, setOccupancy] = useState([]);
   const [payReport, setPayReport] = useState(null);
   const [cmpStats, setCmpStats] = useState(null);
+  const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -27,7 +28,7 @@ export const AdminDashboard = () => {
         setPayReport(p.data);
         setCmpStats(c.data);
       })
-      .catch(console.error)
+      .catch(() => setError('Failed to load dashboard data. Please try again.'))
       .finally(() => setLoading(false));
   }, []);
 
@@ -48,6 +49,7 @@ export const AdminDashboard = () => {
         title={`Welcome, ${user?.name} 👋`}
         subtitle={`${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`}
       />
+      {error && <Alert type="error">{error}</Alert>}
 
       {/* Stat Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 28 }}>

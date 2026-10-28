@@ -1,11 +1,14 @@
 const { Hall, Room, Allocation, Payment, Complaint, User, sequelize } = require('../models');
 const { Op } = require('sequelize');
+const { getManagedHallIds } = require('../middleware/managerScope');
 
 // GET /api/reports/occupancy
 const getOccupancyReport = async (req, res) => {
   try {
+    const hallWhere = { isActive: true };
+    if (req.user.role === 'hall_manager') hallWhere.id = { [Op.in]: await getManagedHallIds(req.user) };
     const halls = await Hall.findAll({
-      where: { isActive: true },
+      where: hallWhere,
       include: [{ model: Room, as: 'rooms' }],
     });
 
@@ -36,7 +39,8 @@ const getOccupancyReport = async (req, res) => {
 
     res.json(report);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
@@ -46,7 +50,9 @@ const getPaymentReport = async (req, res) => {
     const { year } = req.query;
     const where = year ? { year: parseInt(year) } : {};
 
-    const payments = await Payment.findAll({ where });
+    const paymentWhere = { ...where };
+    if (req.user.role === 'hall_manager') paymentWhere['$Allocation.hallId$'] = { [Op.in]: await getManagedHallIds(req.user) };
+    const payments = await Payment.findAll({ where: paymentWhere, include: [{ model: Allocation }] });
     const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
     const monthly = months.map(month => {
@@ -71,14 +77,18 @@ const getPaymentReport = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
 // GET /api/reports/complaints
 const getComplaintReport = async (req, res) => {
   try {
+    const complaintWhere = {};
+    if (req.user.role === 'hall_manager') complaintWhere.hallId = { [Op.in]: await getManagedHallIds(req.user) };
     const complaints = await Complaint.findAll({
+      where: complaintWhere,
       include: [{ model: Hall, as: 'hall', attributes: ['name'] }],
     });
 
@@ -102,25 +112,32 @@ const getComplaintReport = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
 // GET /api/reports/dashboard
 const getDashboardStats = async (req, res) => {
   try {
+    const managedHallIds = req.user.role === 'hall_manager' ? await getManagedHallIds(req.user) : null;
+    const hallFilter = managedHallIds ? { hallId: { [Op.in]: managedHallIds } } : {};
+    const paymentFilter = managedHallIds ? { '$Allocation.hallId$': { [Op.in]: managedHallIds } } : {};
     const [totalStudents, totalRooms, activeAllocations, pendingApplications, pendingPayments, openComplaints] = await Promise.all([
-      User.count({ where: { role: 'student', isActive: true } }),
-      Room.count(),
-      Allocation.count({ where: { status: 'active' } }),
-      require('../models').RoomApplication.count({ where: { status: 'pending' } }),
-      Payment.count({ where: { status: { [Op.in]: ['pending', 'overdue'] } } }),
-      Complaint.count({ where: { status: { [Op.notIn]: ['resolved', 'closed'] } } }),
+      managedHallIds
+        ? Allocation.count({ distinct: true, col: 'studentId', where: { status: 'active', ...hallFilter } })
+        : User.count({ where: { role: 'student', isActive: true } }),
+      Room.count({ where: hallFilter }),
+      Allocation.count({ where: { status: 'active', ...hallFilter } }),
+      require('../models').RoomApplication.count({ where: { status: 'pending', ...hallFilter } }),
+      Payment.count({ where: { status: { [Op.in]: ['pending', 'overdue'] }, ...paymentFilter }, include: managedHallIds ? [{ model: Allocation }] : [] }),
+      Complaint.count({ where: { status: { [Op.notIn]: ['resolved', 'closed'] }, ...hallFilter } }),
     ]);
 
     res.json({ totalStudents, totalRooms, activeAllocations, pendingApplications, pendingPayments, openComplaints });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 

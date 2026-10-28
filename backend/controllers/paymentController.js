@@ -1,11 +1,15 @@
 const { Payment, Allocation, Room, User, Hall } = require('../models');
 const { Op } = require('sequelize');
+const { getManagedHallIds, canManageHall } = require('../middleware/managerScope');
 
 // GET /api/payments
 const getPayments = async (req, res) => {
   try {
     const where = {};
     if (req.user.role === 'student') where.studentId = req.user.id;
+    if (req.user.role === 'hall_manager') {
+      where['$Allocation.hallId$'] = { [Op.in]: await getManagedHallIds(req.user) };
+    }
     if (req.query.status) where.status = req.query.status;
     if (req.query.month) where.month = req.query.month;
     if (req.query.year) where.year = req.query.year;
@@ -23,7 +27,8 @@ const getPayments = async (req, res) => {
     });
     res.json(payments);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
@@ -31,6 +36,11 @@ const getPayments = async (req, res) => {
 const generateMonthlyFees = async (req, res) => {
   try {
     const { month, year } = req.body;
+    const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    const numericYear = Number(year);
+    if (!months.includes(month) || !Number.isInteger(numericYear) || numericYear < 2000 || numericYear > 2100) {
+      return res.status(400).json({ message: 'Valid month and year are required' });
+    }
     const allocations = await Allocation.findAll({
       where: { status: 'active' },
       include: [{ model: Room, as: 'room' }],
@@ -42,7 +52,7 @@ const generateMonthlyFees = async (req, res) => {
         where: { allocationId: alloc.id, month, year },
       });
       if (!existing) {
-        const dueDate = new Date(year, new Date(`${month} 1`).getMonth(), 10);
+        const dueDate = new Date(numericYear, months.indexOf(month), 10);
         const payment = await Payment.create({
           studentId: alloc.studentId,
           allocationId: alloc.id,
@@ -57,7 +67,8 @@ const generateMonthlyFees = async (req, res) => {
 
     res.json({ message: `Generated ${created.length} payment records for ${month} ${year}` });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
@@ -66,6 +77,10 @@ const confirmPayment = async (req, res) => {
   try {
     const payment = await Payment.findByPk(req.params.id);
     if (!payment) return res.status(404).json({ message: 'Payment not found' });
+    const allocation = await Allocation.findByPk(payment.allocationId);
+    if (!allocation || !(await canManageHall(req.user, allocation.hallId))) {
+      return res.status(403).json({ message: 'Insufficient permissions' });
+    }
 
     const { paymentMethod, transactionId, notes } = req.body;
     await payment.update({
@@ -79,7 +94,8 @@ const confirmPayment = async (req, res) => {
 
     res.json({ message: 'Payment confirmed', payment });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
@@ -97,7 +113,8 @@ const markOverduePayments = async (req, res) => {
     );
     res.json({ message: `Marked ${count} payments as overdue` });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
@@ -105,7 +122,12 @@ const markOverduePayments = async (req, res) => {
 const getPaymentSummary = async (req, res) => {
   try {
     const studentId = req.user.role === 'student' ? req.user.id : req.query.studentId;
-    const all = await Payment.findAll({ where: { studentId } });
+    const paymentWhere = {};
+    if (studentId) paymentWhere.studentId = studentId;
+    if (req.user.role === 'hall_manager') {
+      paymentWhere['$Allocation.hallId$'] = { [Op.in]: await getManagedHallIds(req.user) };
+    }
+    const all = await Payment.findAll({ where: paymentWhere, include: [{ model: Allocation }] });
     const summary = {
       total: all.length,
       paid: all.filter(p => p.status === 'paid').length,
@@ -116,7 +138,8 @@ const getPaymentSummary = async (req, res) => {
     };
     res.json(summary);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 

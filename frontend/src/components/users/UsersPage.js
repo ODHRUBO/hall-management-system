@@ -25,7 +25,8 @@ export const UsersPage = () => {
 
   const save = async () => {
     try {
-      if (editUser) await usersAPI.update(editUser.id, form);
+      const data = editUser && !form.password ? { ...form, password: undefined } : form;
+      if (editUser) await usersAPI.update(editUser.id, data);
       else await usersAPI.create(form);
       setModal(false);
       setMsg({ type: 'success', text: `User ${editUser ? 'updated' : 'created'}` });

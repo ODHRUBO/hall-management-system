@@ -21,7 +21,8 @@ const register = async (req, res) => {
 
     res.status(201).json({ message: 'Registration successful', token, user });
   } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
   }
 };
 
@@ -41,7 +42,8 @@ const login = async (req, res) => {
     const token = generateToken(user.id);
     res.json({ message: 'Login successful', token, user });
   } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
   }
 };
 
@@ -57,7 +59,8 @@ const updateProfile = async (req, res) => {
     await req.user.update({ name, phone, department });
     res.json({ message: 'Profile updated', user: req.user });
   } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
   }
 };
 
@@ -65,13 +68,17 @@ const updateProfile = async (req, res) => {
 const changePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
+    if (typeof currentPassword !== 'string' || typeof newPassword !== 'string' || newPassword.length < 6) {
+      return res.status(400).json({ message: 'New password must be at least 6 characters' });
+    }
     const isMatch = await req.user.comparePassword(currentPassword);
     if (!isMatch) return res.status(400).json({ message: 'Current password is incorrect' });
 
     await req.user.update({ password: newPassword });
     res.json({ message: 'Password updated successfully' });
   } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
   }
 };
 

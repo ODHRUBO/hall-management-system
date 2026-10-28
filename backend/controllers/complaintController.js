@@ -1,4 +1,5 @@
 const { Complaint, User, Hall } = require('../models');
+const { getManagedHallIds, canManageHall } = require('../middleware/managerScope');
 
 // POST /api/complaints
 const submitComplaint = async (req, res) => {
@@ -9,7 +10,8 @@ const submitComplaint = async (req, res) => {
     });
     res.status(201).json({ message: 'Complaint submitted', complaint });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
@@ -18,6 +20,7 @@ const getComplaints = async (req, res) => {
   try {
     const where = {};
     if (req.user.role === 'student') where.studentId = req.user.id;
+    if (req.user.role === 'hall_manager') where.hallId = { [require('sequelize').Op.in]: await getManagedHallIds(req.user) };
     if (req.query.status) where.status = req.query.status;
     if (req.query.category) where.category = req.query.category;
     if (req.query.hallId) where.hallId = req.query.hallId;
@@ -33,7 +36,8 @@ const getComplaints = async (req, res) => {
     });
     res.json(complaints);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
@@ -42,6 +46,7 @@ const updateComplaint = async (req, res) => {
   try {
     const complaint = await Complaint.findByPk(req.params.id);
     if (!complaint) return res.status(404).json({ message: 'Complaint not found' });
+    if (!(await canManageHall(req.user, complaint.hallId))) return res.status(403).json({ message: 'Insufficient permissions' });
 
     const { status, resolution, assignedToId, priority } = req.body;
     const updates = { status, priority };
@@ -52,14 +57,18 @@ const updateComplaint = async (req, res) => {
     await complaint.update(updates);
     res.json({ message: 'Complaint updated', complaint });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
 // GET /api/complaints/stats
 const getComplaintStats = async (req, res) => {
   try {
-    const all = await Complaint.findAll();
+    const where = req.user.role === 'hall_manager'
+      ? { hallId: { [require('sequelize').Op.in]: await getManagedHallIds(req.user) } }
+      : {};
+    const all = await Complaint.findAll({ where });
     const stats = {
       total: all.length,
       submitted: all.filter(c => c.status === 'submitted').length,
@@ -74,7 +83,8 @@ const getComplaintStats = async (req, res) => {
     });
     res.json(stats);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 

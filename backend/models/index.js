@@ -59,6 +59,8 @@ const Room = sequelize.define('Room', {
   floor: { type: DataTypes.INTEGER, defaultValue: 1 },
   facilities: { type: DataTypes.JSON, defaultValue: [] },
   status: { type: DataTypes.ENUM('available', 'occupied', 'maintenance', 'reserved'), defaultValue: 'available' },
+}, {
+  indexes: [{ unique: true, fields: ['roomNumber', 'hallId'] }],
 });
 
 // ─── RoomApplication ─────────────────────────────────────────────────────────
@@ -114,6 +116,8 @@ const Payment = sequelize.define('Payment', {
   transactionId: { type: DataTypes.STRING, allowNull: true },
   confirmedById: { type: DataTypes.UUID, allowNull: true },
   notes: { type: DataTypes.TEXT, allowNull: true },
+}, {
+  indexes: [{ unique: true, fields: ['allocationId', 'month', 'year'] }],
 });
 
 // ─── Complaint ────────────────────────────────────────────────────────────────

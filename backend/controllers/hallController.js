@@ -1,26 +1,38 @@
-const { Hall, Room, User, Allocation } = require('../models');
+const { Hall, Room, User, Allocation, sequelize } = require('../models');
 const { Op } = require('sequelize');
+const { canManageHall } = require('../middleware/managerScope');
 
 // ─── Halls ─────────────────────────────────────────────────────────────────
 const getAllHalls = async (req, res) => {
   try {
+    const where = { isActive: true };
+    if (req.user.role === 'hall_manager') where.managerId = req.user.id;
     const halls = await Hall.findAll({
-      where: { isActive: true },
+      where,
       include: [{ model: User, as: 'manager', attributes: ['id', 'name', 'email'] }],
     });
     res.json(halls);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
 const createHall = async (req, res) => {
   try {
     const { name, description, managerId } = req.body;
-    const hall = await Hall.create({ name, description, managerId });
+    const normalizedManagerId = managerId || null;
+    if (normalizedManagerId) {
+      const manager = await User.findOne({
+        where: { id: normalizedManagerId, role: 'hall_manager', isActive: true },
+      });
+      if (!manager) return res.status(400).json({ message: 'Selected manager is invalid' });
+    }
+    const hall = await Hall.create({ name, description, managerId: normalizedManagerId });
     res.status(201).json({ message: 'Hall created', hall });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
@@ -28,10 +40,19 @@ const updateHall = async (req, res) => {
   try {
     const hall = await Hall.findByPk(req.params.id);
     if (!hall) return res.status(404).json({ message: 'Hall not found' });
-    await hall.update(req.body);
+    const { name, description, managerId, isActive } = req.body;
+    const normalizedManagerId = managerId || null;
+    if (normalizedManagerId) {
+      const manager = await User.findOne({
+        where: { id: normalizedManagerId, role: 'hall_manager', isActive: true },
+      });
+      if (!manager) return res.status(400).json({ message: 'Selected manager is invalid' });
+    }
+    await hall.update({ name, description, managerId: normalizedManagerId, isActive });
     res.json({ message: 'Hall updated', hall });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
@@ -42,7 +63,8 @@ const deleteHall = async (req, res) => {
     await hall.update({ isActive: false });
     res.json({ message: 'Hall deleted' });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
@@ -52,6 +74,7 @@ const getRooms = async (req, res) => {
     const { hallId, status, type } = req.query;
     const where = {};
     if (hallId) where.hallId = hallId;
+    if (req.user.role === 'hall_manager') where.hallId = { [Op.in]: (await require('../middleware/managerScope').getManagedHallIds(req.user)) };
     if (status) where.status = status;
     if (type) where.type = type;
 
@@ -62,7 +85,8 @@ const getRooms = async (req, res) => {
     });
     res.json(rooms);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
@@ -70,15 +94,22 @@ const createRoom = async (req, res) => {
   try {
     const { roomNumber, hallId, type, capacity, monthlyFee, floor, facilities } = req.body;
     const existing = await Room.findOne({ where: { roomNumber, hallId } });
+    if (!(await canManageHall(req.user, hallId))) return res.status(403).json({ message: 'Insufficient permissions' });
     if (existing) return res.status(400).json({ message: 'Room already exists in this hall' });
 
-    const room = await Room.create({ roomNumber, hallId, type, capacity, monthlyFee, floor, facilities });
-
-    await Hall.increment('totalRooms', { where: { id: hallId } });
-
-    res.status(201).json({ message: 'Room created', room });
+    const transaction = await sequelize.transaction();
+    try {
+      const room = await Room.create({ roomNumber, hallId, type, capacity, monthlyFee, floor, facilities }, { transaction });
+      await Hall.increment('totalRooms', { where: { id: hallId }, transaction });
+      await transaction.commit();
+      return res.status(201).json({ message: 'Room created', room });
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
@@ -86,10 +117,14 @@ const updateRoom = async (req, res) => {
   try {
     const room = await Room.findByPk(req.params.id);
     if (!room) return res.status(404).json({ message: 'Room not found' });
-    await room.update(req.body);
+    if (!(await canManageHall(req.user, room.hallId))) return res.status(403).json({ message: 'Insufficient permissions' });
+    const updates = { roomNumber: req.body.roomNumber, type: req.body.type, capacity: req.body.capacity,
+      monthlyFee: req.body.monthlyFee, floor: req.body.floor, facilities: req.body.facilities, status: req.body.status };
+    await room.update(updates);
     res.json({ message: 'Room updated', room });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
@@ -100,11 +135,19 @@ const deleteRoom = async (req, res) => {
     if (room.currentOccupancy > 0) {
       return res.status(400).json({ message: 'Cannot delete occupied room' });
     }
-    await room.destroy();
-    await Hall.decrement('totalRooms', { where: { id: room.hallId } });
+    const transaction = await sequelize.transaction();
+    try {
+      await room.destroy({ transaction });
+      await Hall.decrement('totalRooms', { where: { id: room.hallId }, transaction });
+      await transaction.commit();
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
     res.json({ message: 'Room deleted' });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 

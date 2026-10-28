@@ -5,7 +5,7 @@ import { PageHeader, Card, DataTable, Badge, Btn, Modal, StatCard, Field, Input,
 
 export const PaymentsPage = () => {
   const { user } = useAuth();
-  const isAdmin = user?.role !== 'student';
+  const isAdmin = user?.role === 'admin';
 
   const [payments, setPayments] = useState([]);
   const [summary, setSummary] = useState(null);
@@ -54,9 +54,13 @@ export const PaymentsPage = () => {
 
   const handleMarkOverdue = async () => {
     if (!window.confirm('Mark all overdue pending payments?')) return;
-    const res = await paymentsAPI.markOverdue();
-    setMsg({ type: 'info', text: res.data.message });
-    load();
+    try {
+      const res = await paymentsAPI.markOverdue();
+      setMsg({ type: 'info', text: res.data.message });
+      load();
+    } catch (e) {
+      setMsg({ type: 'error', text: e.response?.data?.message || 'Failed to mark payments overdue' });
+    }
   };
 
   const cols = [

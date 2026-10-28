@@ -1,5 +1,6 @@
 const { RoomApplication, Room, Hall, Allocation, Payment, User, sequelize } = require('../models');
 const { Op } = require('sequelize');
+const { getManagedHallIds, canManageHall } = require('../middleware/managerScope');
 
 // POST /api/applications — student submits application
 const submitApplication = async (req, res) => {
@@ -16,7 +17,8 @@ const submitApplication = async (req, res) => {
     });
     res.status(201).json({ message: 'Application submitted', application });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
@@ -25,6 +27,7 @@ const getApplications = async (req, res) => {
   try {
     const where = {};
     if (req.user.role === 'student') where.studentId = req.user.id;
+    if (req.user.role === 'hall_manager') where.hallId = { [Op.in]: await getManagedHallIds(req.user) };
     if (req.query.status) where.status = req.query.status;
     if (req.query.hallId) where.hallId = req.query.hallId;
 
@@ -39,7 +42,8 @@ const getApplications = async (req, res) => {
     });
     res.json(applications);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
@@ -48,10 +52,21 @@ const reviewApplication = async (req, res) => {
   const t = await sequelize.transaction();
   try {
     const { status, reviewNote, assignedRoomId } = req.body;
-    const application = await RoomApplication.findByPk(req.params.id, { transaction: t });
+    const application = await RoomApplication.findByPk(req.params.id, {
+      transaction: t,
+      lock: t.LOCK.UPDATE,
+    });
     if (!application) {
       await t.rollback();
       return res.status(404).json({ message: 'Application not found' });
+    }
+    if (application.status !== 'pending') {
+      await t.rollback();
+      return res.status(400).json({ message: 'Only pending applications can be reviewed' });
+    }
+    if (!(await canManageHall(req.user, application.hallId))) {
+      await t.rollback();
+      return res.status(403).json({ message: 'Insufficient permissions' });
     }
 
     if (status === 'approved') {
@@ -59,10 +74,22 @@ const reviewApplication = async (req, res) => {
         await t.rollback();
         return res.status(400).json({ message: 'assignedRoomId is required for approval' });
       }
-      const room = await Room.findByPk(assignedRoomId, { transaction: t });
-      if (!room || room.currentOccupancy >= room.capacity) {
+      const room = await Room.findByPk(assignedRoomId, {
+        transaction: t,
+        lock: t.LOCK.UPDATE,
+      });
+      if (!room || room.hallId !== application.hallId || room.type !== application.preferredRoomType ||
+          room.status === 'maintenance' || room.currentOccupancy >= room.capacity) {
         await t.rollback();
         return res.status(400).json({ message: 'Room not available' });
+      }
+      const activeAllocation = await Allocation.findOne({
+        where: { studentId: application.studentId, status: 'active' },
+        transaction: t,
+      });
+      if (activeAllocation) {
+        await t.rollback();
+        return res.status(400).json({ message: 'Student already has an active allocation' });
       }
 
       // Create allocation
@@ -85,7 +112,8 @@ const reviewApplication = async (req, res) => {
     res.json({ message: `Application ${status}`, application });
   } catch (error) {
     await t.rollback();
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
@@ -94,6 +122,7 @@ const getAllocations = async (req, res) => {
   try {
     const where = { status: 'active' };
     if (req.user.role === 'student') where.studentId = req.user.id;
+    if (req.user.role === 'hall_manager') where.hallId = { [Op.in]: await getManagedHallIds(req.user) };
     if (req.query.hallId) where.hallId = req.query.hallId;
 
     const allocations = await Allocation.findAll({
@@ -107,7 +136,8 @@ const getAllocations = async (req, res) => {
     });
     res.json(allocations);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error(error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 

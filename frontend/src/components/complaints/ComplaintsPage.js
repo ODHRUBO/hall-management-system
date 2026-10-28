@@ -97,7 +97,6 @@ export const ComplaintsPage = () => {
             {s.replace(/_/g, ' ') || 'All'}
           </Btn>
         ))}
-        {isAdmin && <Btn size="sm" onClick={() => setSubmitModal(true)} style={{ marginLeft: 'auto' }}>+ Raise Complaint</Btn>}
       </div>
 
       <Card>
